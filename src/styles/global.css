@@ -1,0 +1,12 @@
+/* src/styles/global.css */
+body {
+  margin: 0;
+  font-family: 'Roboto', sans-serif;
+}
+
+.desk-grid {
+  background-image: 
+    linear-gradient(to right, #e0e0e0 1px, transparent 1px),
+    linear-gradient(to bottom, #e0e0e0 1px, transparent 1px);
+  background-size: 25px 25px; /* Updated grid size */
+}

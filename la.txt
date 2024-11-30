@@ -1,0 +1,950 @@
+--- Start of .gitignore ---
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+package-lock.json
+la.txt
+--- End of .gitignore ---
+
+--- Start of index.html ---
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- <link rel="icon" href="/favicon.ico" /> -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Classroom Layout Manager</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+--- End of index.html ---
+
+--- Start of la.txt ---
+
+--- End of la.txt ---
+
+--- Start of package.json ---
+{
+  "name": "classroom-layout",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/papaparse": "^5.3.15",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.1"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.13.5",
+    "@emotion/styled": "^11.13.5",
+    "@mui/material": "^6.1.9",
+    "papaparse": "^5.4.1",
+    "react-dnd": "^16.0.1",
+    "react-dnd-html5-backend": "^16.0.1",
+    "zustand": "^5.0.1"
+  }
+}
+
+--- End of package.json ---
+
+--- Start of src/App.tsx ---
+// src/App.tsx
+
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Box } from '@mui/material';
+import Toolbar from './components/Toolbar/Toolbar';
+import Desk from './components/Desk/Desk';
+import useStore from './store/useStore';
+import Onboarding from './components/Onboarding/Onboarding';
+import StudentAssignment from './components/StudentAssignment/StudentAssignment';
+import { useDrop } from 'react-dnd';
+import SelectionBox from './components/SelectionBox/SelectionBox';
+
+const App: React.FC = () => {
+  const desks = useStore((state) => state.desks);
+  const initializeLayouts = useStore((state) => state.initializeLayouts);
+  const clearSelection = useStore((state) => state.clearSelection);
+  const updateDesk = useStore((state) => state.updateDesk);
+  const setSelectedDesks = useStore((state) => state.setSelectedDesks);
+
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // State for rectangular selection
+  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
+  const [selectionCurrent, setSelectionCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [isSelecting, setIsSelecting] = useState<boolean>(false);
+  const [isDraggingOrSelecting, setIsDraggingOrSelecting] = useState<boolean>(false);
+
+  useEffect(() => {
+    initializeLayouts();
+  }, [initializeLayouts]);
+
+  const handleBackgroundClick = () => {
+    if (!isDraggingOrSelecting) {
+      clearSelection();
+    }
+  };
+
+  const gridSize = 25; // Updated grid size
+
+  const snapToGrid = (x: number, y: number): { x: number; y: number } => {
+    const snappedX = Math.round(x / gridSize) * gridSize;
+    const snappedY = Math.round(y / gridSize) * gridSize;
+    return { x: snappedX, y: snappedY };
+  };
+
+  const [, drop] = useDrop({
+    accept: 'DESK',
+    drop: (item: { ids: string[] }, monitor) => {
+      if (!containerRef.current) return;
+
+      const delta = monitor.getDifferenceFromInitialOffset();
+
+      if (!delta) return;
+
+      const snappedDelta = {
+        x: Math.round(delta.x / gridSize) * gridSize,
+        y: Math.round(delta.y / gridSize) * gridSize,
+      };
+
+      item.ids.forEach((id) => {
+        const desk = desks.find((desk) => desk.id === id);
+        if (desk) {
+          updateDesk({
+            ...desk,
+            position: {
+              x: desk.position.x + snappedDelta.x,
+              y: desk.position.y + snappedDelta.y,
+            },
+          });
+        }
+      });
+    },
+  });
+
+  // Mouse event handlers for rectangular selection
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Only initiate selection if not clicking on a desk
+    if (e.target === containerRef.current) {
+      const { x, y } = convertToContainerCoords(e.clientX, e.clientY);
+      setSelectionStart({ x, y });
+      setSelectionCurrent({ x, y });
+      setIsSelecting(true);
+      setIsDraggingOrSelecting(true);
+      clearSelection();
+    }
+  };
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (isSelecting && selectionStart) {
+      const { x, y } = convertToContainerCoords(e.clientX, e.clientY);
+      setSelectionCurrent({ x, y });
+    }
+  }, [isSelecting, selectionStart]);
+
+  const handleMouseUp = useCallback((e: MouseEvent) => {
+    if (isSelecting && selectionStart && selectionCurrent && containerRef.current) {
+      const x1 = Math.min(selectionStart.x, selectionCurrent.x);
+      const y1 = Math.min(selectionStart.y, selectionCurrent.y);
+      const x2 = Math.max(selectionStart.x, selectionCurrent.x);
+      const y2 = Math.max(selectionStart.y, selectionCurrent.y);
+
+      console.log('Selection Rectangle:', { x1, y1, x2, y2 });
+
+      // Determine which desks are within the selection rectangle
+      const selected = desks
+        .filter((desk) => {
+          // Determine desk dimensions based on rotation
+          const isRotated = desk.rotation % 180 !== 0;
+          const deskWidth = isRotated ? 50 : 100;
+          const deskHeight = isRotated ? 100 : 50;
+
+          const deskRect = {
+            left: desk.position.x,
+            top: desk.position.y,
+            right: desk.position.x + deskWidth,
+            bottom: desk.position.y + deskHeight,
+          };
+
+          console.log(`Desk ${desk.id} Rect:`, deskRect);
+
+          // Check for overlap using Axis-Aligned Bounding Box (AABB) collision detection
+          const isOverlap = !(
+            deskRect.right < x1 ||
+            deskRect.left > x2 ||
+            deskRect.bottom < y1 ||
+            deskRect.top > y2
+          );
+
+          console.log(`Desk ${desk.id} Overlaps:`, isOverlap);
+
+          return isOverlap;
+        })
+        .map((desk) => desk.id);
+
+      console.log('Selected Desks:', selected);
+
+      setSelectedDesks(selected);
+    }
+
+    // Reset selection state
+    setIsSelecting(false);
+    setSelectionStart(null);
+    setSelectionCurrent(null);
+    setIsDraggingOrSelecting(false);
+
+    // Prevent the onClick from firing
+    e.stopPropagation();
+  }, [isSelecting, selectionStart, selectionCurrent, desks, setSelectedDesks]);
+
+  useEffect(() => {
+    if (isSelecting) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    } else {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isSelecting, handleMouseMove, handleMouseUp]);
+
+  // Convert screen coordinates to container coordinates
+  const convertToContainerCoords = (x: number, y: number): { x: number; y: number } => {
+    if (!containerRef.current) return { x: 0, y: 0 };
+    const rect = containerRef.current.getBoundingClientRect();
+    const converted = { x: x - rect.left, y: y - rect.top };
+    console.log('Converted Coordinates:', converted);
+    return converted;
+  };
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+      <Toolbar />
+      <Box
+        ref={(node: HTMLDivElement | null) => {
+          if (node) {
+            containerRef.current = node;
+            drop(node);
+          }
+        }}
+        sx={{
+          flex: 1,
+          position: 'relative',
+          backgroundColor: '#f0f0f0',
+          backgroundImage:
+            'linear-gradient(to right, #e0e0e0 1px, transparent 1px), linear-gradient(to bottom, #e0e0e0 1px, transparent 1px)',
+          backgroundSize: `${gridSize}px ${gridSize}px`, // Updated grid size in CSS
+          cursor: isSelecting ? 'crosshair' : 'default',
+        }}
+        onMouseDown={handleMouseDown} // Initiate selection on background mouse down
+        onClick={handleBackgroundClick} // Clear selection on background click if not dragging/selecting
+      >
+        {/* Selection Rectangle */}
+        {isSelecting && selectionStart && selectionCurrent && (
+          <SelectionBox 
+            start={selectionStart} 
+            current={selectionCurrent} 
+          />
+        )}
+
+        {/* Render Desks */}
+        {desks.map((desk) => (
+          <Desk key={desk.id} desk={desk} />
+        ))}
+      </Box>
+      <StudentAssignment />
+      <Onboarding />
+    </Box>
+  );
+};
+
+export default App;
+--- End of src/App.tsx ---
+
+--- Start of src/components/Desk/Desk.tsx ---
+// src/components/Desk/Desk.tsx
+
+import React from 'react';
+import { useDrag } from 'react-dnd';
+import { Paper, Typography } from '@mui/material';
+import useStore, { Desk } from '../../store/useStore';
+
+interface DeskProps {
+  desk: Desk;
+}
+
+const DeskComponent: React.FC<DeskProps> = ({ desk }) => {
+  const rotateDesk = useStore((state) => state.rotateDesk);
+  const toggleDeskSelection = useStore((state) => state.toggleDeskSelection);
+  
+  // Subscribe directly to the selection status of this desk
+  const isSelected = useStore((state) => state.selectedDesks.includes(desk.id));
+  
+  // Get all selected desks for drag item
+  const selectedDesks = useStore((state) => state.selectedDesks);
+  
+  const [{ isDragging }, drag] = useDrag(() => ({
+    type: 'DESK',
+    item: { 
+      ids: isSelected ? selectedDesks : [desk.id], // Include all selected desks if this desk is selected
+      type: 'DESK' 
+    },
+    collect: (monitor) => ({
+      isDragging: monitor.isDragging(),
+    }),
+  }), [desk.id, isSelected, selectedDesks]);
+  
+  const handleDoubleClick = () => {
+    rotateDesk(desk.id);
+  };
+  
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent click from propagating to parent
+    toggleDeskSelection(desk.id);
+  };
+  
+  // Determine desk dimensions based on rotation
+  const isRotated = desk.rotation % 180 !== 0;
+  const deskWidth = isRotated ? 50 : 100;
+  const deskHeight = isRotated ? 100 : 50;
+  
+  console.log(`Rendering Desk ${desk.id}: isSelected = ${isSelected}`);
+  
+  return (
+    <Paper
+      ref={drag}
+      onDoubleClick={handleDoubleClick}
+      onClick={handleClick}
+      style={{
+        position: 'absolute',
+        left: desk.position.x,
+        top: desk.position.y,
+        transform: `rotate(${desk.rotation}deg)`,
+        opacity: isDragging ? 0.5 : 1,
+        width: deskWidth, // Dynamic width based on rotation
+        height: deskHeight, // Dynamic height based on rotation
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: isSelected ? 'move' : 'pointer',
+        border: isSelected ? '3px solid #1976d2' : '3px solid transparent', // Thicker and distinct blue border
+        boxShadow: isSelected ? '0 0 15px rgba(25, 118, 210, 0.7)' : 'none', // More prominent shadow
+        boxSizing: 'border-box',
+        transition: 'border 0.2s, box-shadow 0.2s',
+        zIndex: isSelected ? 2 : 1, // Ensure selected desks are above others
+      }}
+      elevation={3}
+    >
+      <Typography variant="body2">
+        {desk.type === 'teacher'
+          ? 'Teacher'
+          : desk.assignedStudent
+          ? desk.assignedStudent
+          : `Student ${desk.id}`}
+      </Typography>
+    </Paper>
+  );
+};
+
+export default DeskComponent;
+--- End of src/components/Desk/Desk.tsx ---
+
+--- Start of src/components/Group/Group.tsx ---
+// src/components/Group/Group.tsx
+import React from 'react';
+import { Paper, Typography } from '@mui/material';
+import { Group as GroupType } from '../../store/useStore';
+
+interface GroupProps {
+  group: GroupType;
+  children: React.ReactNode;
+}
+
+const GroupComponent: React.FC<GroupProps> = ({ group, children }) => {
+  return (
+    <Paper
+      style={{
+        position: 'absolute',
+        left: group.position?.x || 0, // Assuming Group has position if needed
+        top: group.position?.y || 0,
+        padding: 10,
+        border: '2px dashed #ccc',
+      }}
+      elevation={1}
+    >
+      <Typography variant="subtitle1">{group.label}</Typography>
+      {children}
+    </Paper>
+  );
+};
+
+export default GroupComponent;
+--- End of src/components/Group/Group.tsx ---
+
+--- Start of src/components/Onboarding/Onboarding.tsx ---
+// src/components/Onboarding/Onboarding.tsx
+import React, { useState } from 'react';
+import { Modal, Box, TextField, Button } from '@mui/material';
+import useStore from '../../store/useStore';
+
+const Onboarding: React.FC = () => {
+  const [open, setOpen] = useState(true);
+  const [deskCount, setDeskCount] = useState<number>(20);
+  const addDesk = useStore((state) => state.addDesk);
+
+  const handleSubmit = () => {
+    for (let i = 0; i < deskCount; i++) {
+      addDesk();
+    }
+    setOpen(false);
+  };
+
+  return (
+    <Modal open={open}>
+      <Box
+        sx={{
+          position: 'absolute' as const,
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 300,
+          bgcolor: 'background.paper',
+          boxShadow: 24,
+          p: 4,
+        }}
+      >
+        <h2>Welcome to Classroom Layout Manager</h2>
+        <TextField
+          label="Number of Desks"
+          type="number"
+          value={deskCount}
+          onChange={(e) => setDeskCount(parseInt(e.target.value, 10))}
+          fullWidth
+          inputProps={{ min: 1 }}
+        />
+        <Button onClick={handleSubmit} variant="contained" sx={{ mt: 2 }}>
+          Start
+        </Button>
+      </Box>
+    </Modal>
+  );
+};
+
+export default Onboarding;
+--- End of src/components/Onboarding/Onboarding.tsx ---
+
+--- Start of src/components/StudentAssignment/StudentAssignment.tsx ---
+// src/components/StudentAssignment/StudentAssignment.tsx
+import React from 'react';
+import { Button } from '@mui/material';
+import Papa from 'papaparse';
+import useStore from '../../store/useStore';
+
+const StudentAssignment: React.FC = () => {
+  const assignStudents = useStore((state) => state.assignStudents);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      Papa.parse(file, {
+        header: true,
+        complete: (results) => {
+          const students: string[] = results.data
+            .map((row: any) => row.Name || row.StudentName || row.ID)
+            .filter((name: string | undefined): name is string => Boolean(name));
+          assignStudents(students);
+        },
+        error: (error) => {
+          alert('Error parsing CSV file.');
+          console.error(error);
+        },
+      });
+    }
+  };
+
+  return (
+    <Button variant="contained" component="label" sx={{ m: 2 }}>
+      Import Roster
+      <input type="file" accept=".csv" hidden onChange={handleFileUpload} />
+    </Button>
+  );
+};
+
+export default StudentAssignment;
+--- End of src/components/StudentAssignment/StudentAssignment.tsx ---
+
+--- Start of src/components/Toolbar/Toolbar.tsx ---
+// src/components/Toolbar/Toolbar.tsx
+import React, { useState } from 'react';
+import { Button, ButtonGroup, AppBar, Toolbar as MuiToolbar, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Select, MenuItem, InputLabel, FormControl, Typography } from '@mui/material';
+import useStore from '../../store/useStore';
+
+const ToolbarComponent: React.FC = () => {
+  const addDesk = useStore((state) => state.addDesk);
+  const removeDesk = useStore((state) => state.removeDesk);
+  const rotateDesk = useStore((state) => state.rotateDesk);
+  const groupDesks = useStore((state) => state.groupDesks);
+  const saveLayout = useStore((state) => state.saveLayout);
+  const loadLayout = useStore((state) => state.loadLayout);
+  const selectedDesks = useStore((state) => state.selectedDesks);
+  const clearSelection = useStore((state) => state.clearSelection);
+  const layouts = useStore((state) => state.layouts);
+
+  const [openGroupDialog, setOpenGroupDialog] = useState(false);
+  const [groupName, setGroupName] = useState('');
+
+  const [openLoadDialog, setOpenLoadDialog] = useState(false);
+  const [selectedLayout, setSelectedLayout] = useState('');
+
+  const handleAddDesk = () => {
+    addDesk();
+  };
+
+  const handleRemoveDesk = () => {
+    if (selectedDesks.length === 0) {
+      alert('No desks selected to remove.');
+      return;
+    }
+    selectedDesks.forEach((deskId) => removeDesk(deskId));
+    clearSelection();
+  };
+
+  const handleRotateDesk = () => {
+    if (selectedDesks.length === 0) {
+      alert('No desks selected to rotate.');
+      return;
+    }
+    selectedDesks.forEach((deskId) => rotateDesk(deskId));
+    clearSelection();
+  };
+
+  const handleGroupDesks = () => {
+    if (selectedDesks.length < 2) {
+      alert('Select at least two desks to group.');
+      return;
+    }
+    setOpenGroupDialog(true);
+  };
+
+  const confirmGroupDesks = () => {
+    if (groupName.trim() === '') {
+      alert('Group name cannot be empty.');
+      return;
+    }
+    groupDesks({ label: groupName, deskIds: selectedDesks });
+    setGroupName('');
+    setOpenGroupDialog(false);
+    clearSelection();
+  };
+
+  const handleSaveLayout = () => {
+    const layoutName = prompt('Enter layout name to save:');
+    if (layoutName) {
+      saveLayout(layoutName);
+    }
+  };
+
+  const handleLoadLayout = () => {
+    setOpenLoadDialog(true);
+  };
+
+  const confirmLoadLayout = () => {
+    if (selectedLayout) {
+      loadLayout(selectedLayout);
+      setOpenLoadDialog(false);
+    }
+  };
+
+  return (
+    <AppBar position="static">
+      <MuiToolbar>
+        <ButtonGroup variant="contained" aria-label="toolbar">
+          <Button onClick={handleAddDesk}>Add Desk</Button>
+          <Button onClick={handleRemoveDesk}>Remove Desk</Button>
+          <Button onClick={handleRotateDesk}>Rotate Desk</Button>
+          <Button onClick={handleGroupDesks}>Group Desks</Button>
+          <Button onClick={handleSaveLayout}>Save Layout</Button>
+          <Button onClick={handleLoadLayout}>Load Layout</Button>
+        </ButtonGroup>
+      </MuiToolbar>
+
+      {/* Group Desks Dialog */}
+      <Dialog open={openGroupDialog} onClose={() => setOpenGroupDialog(false)}>
+        <DialogTitle>Group Selected Desks</DialogTitle>
+        <DialogContent>
+          <TextField
+            label="Group Name"
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+            fullWidth
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenGroupDialog(false)}>Cancel</Button>
+          <Button onClick={confirmGroupDesks} variant="contained">
+            Group
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Load Layout Dialog */}
+      <Dialog open={openLoadDialog} onClose={() => setOpenLoadDialog(false)}>
+        <DialogTitle>Load Layout</DialogTitle>
+        <DialogContent>
+          {Object.keys(layouts).length === 0 ? (
+            <Typography>No layouts saved.</Typography>
+          ) : (
+            <FormControl fullWidth>
+              <InputLabel id="select-layout-label">Select Layout</InputLabel>
+              <Select
+                labelId="select-layout-label"
+                value={selectedLayout}
+                label="Select Layout"
+                onChange={(e) => setSelectedLayout(e.target.value)}
+              >
+                {Object.keys(layouts).map((layoutName) => (
+                  <MenuItem key={layoutName} value={layoutName}>
+                    {layoutName}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenLoadDialog(false)}>Cancel</Button>
+          <Button onClick={confirmLoadLayout} variant="contained" disabled={!selectedLayout}>
+            Load
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </AppBar>
+  );
+};
+
+export default ToolbarComponent;
+--- End of src/components/Toolbar/Toolbar.tsx ---
+
+--- Start of src/main.tsx ---
+// src/main.tsx
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import { DndProvider } from 'react-dnd';
+import { HTML5Backend } from 'react-dnd-html5-backend';
+import './styles/global.css';
+
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+  <React.StrictMode>
+    <DndProvider backend={HTML5Backend}>
+      <App />
+    </DndProvider>
+  </React.StrictMode>
+);
+--- End of src/main.tsx ---
+
+--- Start of src/store/useStore.ts ---
+// src/store/useStore.ts
+
+import { create } from 'zustand';
+import { generateUniqueId } from '../utils/idGenerator';
+import { seedNames } from '../utils/seedNames';
+
+export type DeskType = 'teacher' | 'student';
+
+export interface Position {
+  x: number;
+  y: number;
+}
+
+export interface Desk {
+  id: string;
+  type: DeskType;
+  position: Position;
+  rotation: number; // Degrees: 0, 90, 180, 270
+  groupId: string | null;
+  assignedStudent?: string;
+}
+
+export type Group = {
+  id: string;
+  label: string;
+  deskIds: string[];
+  position?: { x: number; y: number };
+};
+
+export interface Layouts {
+  [key: string]: Desk[];
+}
+
+interface StoreState {
+  desks: Desk[];
+  groups: Group[];
+  layouts: Layouts;
+  currentLayout: string;
+  selectedDesks: string[]; // Added for selection
+
+  // Seed List Management
+  seedNames: string[];
+  currentSeedIndex: number;
+
+  // Actions
+  addDesk: (deskType?: DeskType) => void;
+  removeDesk: (deskId: string) => void;
+  updateDesk: (updatedDesk: Desk) => void;
+  rotateDesk: (deskId: string) => void;
+  groupDesks: (groupData: { label: string; deskIds: string[] }) => void;
+  saveLayout: (layoutName: string) => void;
+  loadLayout: (layoutName: string) => void;
+  assignStudents: (students: string[]) => void;
+  initializeLayouts: () => void;
+
+  // Selection Actions
+  selectDesk: (deskId: string) => void;
+  deselectDesk: (deskId: string) => void;
+  toggleDeskSelection: (deskId: string) => void;
+  clearSelection: () => void;
+  setSelectedDesks: (deskIds: string[]) => void; // New action
+}
+
+const gridSize = 25; // Updated grid size
+const desksPerRow = 10; // Number of desks per row for initial arrangement
+
+const useStore = create<StoreState>((set, get) => ({
+  desks: [],
+  groups: [],
+  layouts: {},
+  currentLayout: 'default',
+  selectedDesks: [],
+
+  // Initialize seedNames and index
+  seedNames: [...seedNames], // Clone to prevent mutation
+  currentSeedIndex: 0,
+
+  addDesk: (deskType: DeskType = 'student') => {
+    const deskCount = get().desks.length;
+    const row = Math.floor(deskCount / desksPerRow);
+    const col = deskCount % desksPerRow;
+    let assignedStudent: string | undefined = undefined;
+
+    // Assign seed name if available
+    if (get().currentSeedIndex < get().seedNames.length && deskType === 'student') {
+      assignedStudent = get().seedNames[get().currentSeedIndex];
+      set((state) => ({ currentSeedIndex: state.currentSeedIndex + 1 }));
+    }
+
+    const newDesk: Desk = {
+      id: generateUniqueId(),
+      type: deskType,
+      position: { x: col * (100 + gridSize), y: row * (50 + gridSize) }, // Adjusted for desk size and grid
+      rotation: 0,
+      groupId: null,
+      assignedStudent, // Assign seed name if available
+    };
+    set((state: StoreState) => ({ desks: [...state.desks, newDesk] }));
+  },
+
+  removeDesk: (deskId: string) => {
+    set((state) => ({
+      desks: state.desks.filter((desk) => desk.id !== deskId),
+      groups: state.groups.map((group) => ({
+        ...group,
+        deskIds: group.deskIds.filter((id) => id !== deskId),
+      })),
+      selectedDesks: state.selectedDesks.filter((id) => id !== deskId), // Remove from selection if selected
+    }));
+  },
+
+  updateDesk: (updatedDesk: Desk) => {
+    set((state) => ({
+      desks: state.desks.map((desk) =>
+        desk.id === updatedDesk.id ? updatedDesk : desk
+      ),
+    }));
+  },
+
+  rotateDesk: (deskId: string) => {
+    set((state) => ({
+      desks: state.desks.map((desk) =>
+        desk.id === deskId
+          ? { ...desk, rotation: (desk.rotation + 90) % 360 }
+          : desk
+      ),
+    }));
+  },
+
+  groupDesks: (groupData: { label: string; deskIds: string[] }) => {
+    const { label, deskIds } = groupData;
+    const newGroup: Group = {
+      id: generateUniqueId(),
+      label,
+      deskIds,
+    };
+    set((state) => ({
+      groups: [...state.groups, newGroup],
+      desks: state.desks.map((desk) =>
+        deskIds.includes(desk.id) ? { ...desk, groupId: newGroup.id } : desk
+      ),
+    }));
+  },
+
+  saveLayout: (layoutName: string) => {
+    const layouts = { ...get().layouts, [layoutName]: get().desks };
+    localStorage.setItem('classroomLayouts', JSON.stringify(layouts));
+    set({ layouts });
+  },
+
+  loadLayout: (layoutName: string) => {
+    const layouts = get().layouts;
+    const layout = layouts[layoutName];
+    if (layout) {
+      set({ desks: layout, currentLayout: layoutName, selectedDesks: [] });
+    } else {
+      alert(`Layout "${layoutName}" does not exist.`);
+    }
+  },
+
+  assignStudents: (students: string[]) => {
+    const availableDesks = get().desks.filter(
+      (desk) => desk.type === 'student'
+    );
+    const shuffledStudents = [...students].sort(() => 0.5 - Math.random());
+    const assignments: { [deskId: string]: string } = {};
+    shuffledStudents.forEach((student, index) => {
+      if (availableDesks[index]) {
+        assignments[availableDesks[index].id] = student;
+      }
+    });
+    set((state) => ({
+      desks: state.desks.map((desk) =>
+        desk.type === 'student'
+          ? { ...desk, assignedStudent: assignments[desk.id] || undefined }
+          : desk
+      ),
+    }));
+  },
+
+  initializeLayouts: () => {
+    const storedLayouts = JSON.parse(localStorage.getItem('classroomLayouts') || '{}');
+    set({ layouts: storedLayouts });
+  },
+
+  // Selection Actions
+  selectDesk: (deskId: string) => {
+    set((state) => ({
+      selectedDesks: [...state.selectedDesks, deskId],
+    }));
+  },
+  deselectDesk: (deskId: string) => {
+    set((state) => ({
+      selectedDesks: state.selectedDesks.filter((id) => id !== deskId),
+    }));
+  },
+  toggleDeskSelection: (deskId: string) => {
+    set((state) => ({
+      selectedDesks: state.selectedDesks.includes(deskId)
+        ? state.selectedDesks.filter((id) => id !== deskId)
+        : [...state.selectedDesks, deskId],
+    }));
+  },
+  clearSelection: () => {
+    set({ selectedDesks: [] });
+  },
+  setSelectedDesks: (deskIds: string[]) => {
+    console.log('Updating selectedDesks:', deskIds);
+    set({ selectedDesks: deskIds });
+  },
+}));
+
+export default useStore;
+--- End of src/store/useStore.ts ---
+
+--- Start of src/styles/global.css ---
+/* src/styles/global.css */
+body {
+  margin: 0;
+  font-family: 'Roboto', sans-serif;
+}
+
+.desk-grid {
+  background-image: 
+    linear-gradient(to right, #e0e0e0 1px, transparent 1px),
+    linear-gradient(to bottom, #e0e0e0 1px, transparent 1px);
+  background-size: 25px 25px; /* Updated grid size */
+}
+--- End of src/styles/global.css ---
+
+--- Start of src/utils/idGenerator.ts ---
+// src/utils/idGenerator.ts
+export const generateUniqueId = (): string => '_' + Math.random().toString(36).substr(2, 9);
+--- End of src/utils/idGenerator.ts ---
+
+--- Start of src/vite-env.d.ts ---
+/// <reference types="vite/client" />
+
+--- End of src/vite-env.d.ts ---
+
+--- Start of tsconfig.json ---
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["src"]
+}
+
+--- End of tsconfig.json ---
+
